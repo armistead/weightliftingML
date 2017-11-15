@@ -1,0 +1,158 @@
+---
+title: "WeightLiftingStudy"
+author: "armistead"
+date: "October 29, 2017"
+output: html_document
+---
+
+##Weightlifting Data Analysis
+###Introduction
+Research abounds about whether people exercise or not. However, rare is the study about how well people exercise. Thankfully one study from Germany did such research.
+
+In this study, participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: 
+Class A: Exactly according to the specification
+Class B: throwing the elbows to the front
+Class C: lifting the dumbbell only halfway
+Class D: lowering the dumbbell only halfway
+Class E: throwing the hips to the front
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
+
+Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+Our task is to perform some exploratory analysis and build a machine learning model to predict how well any given exercise will be performed.
+
+###Getting Started
+
+First let's load the packages that we plan to use. Tidyverse will allow us some convenient data munging tools. Corrplot will help with Exploratory Data Analysis, and Caret and RandomForest assist with modeling.
+
+```{r packages}
+library(tidyverse)
+library(corrplot)
+library(caret)
+library(randomForest)
+```
+
+Then we have to load the data. After a cursory look at the headers available, we'll take a subset of the columns with only the most meaningful variables and factors.
+
+```{r data}
+rawtraining <- read.csv("pml-training.csv", header=TRUE)
+rawtesting <- read.csv("pml-testing.csv", header=TRUE, stringsAsFactors = FALSE)
+head(rawtraining)
+
+trainingsubset <- rawtraining %>% select(classe, user_name, num_window,
+               roll_belt,pitch_belt,yaw_belt,
+               gyros_belt_x,gyros_belt_y,gyros_belt_z,
+               accel_belt_x,accel_belt_y,accel_belt_z,
+               magnet_belt_x,magnet_belt_y,magnet_belt_z,
+               roll_arm,pitch_arm,yaw_arm,
+               gyros_arm_x,gyros_arm_y,gyros_arm_z,
+               accel_arm_x,accel_arm_y,accel_arm_z,
+               magnet_arm_x,magnet_arm_y,magnet_arm_z,
+               gyros_dumbbell_x,gyros_dumbbell_y,gyros_dumbbell_z,
+               accel_dumbbell_x,accel_dumbbell_y,accel_dumbbell_z,
+               magnet_dumbbell_x,magnet_dumbbell_y,magnet_dumbbell_z,
+               roll_forearm,pitch_forearm,yaw_forearm,
+               gyros_forearm_x,gyros_forearm_y,gyros_forearm_z,
+               accel_forearm_x,accel_forearm_y,accel_forearm_z,
+               magnet_forearm_x,magnet_forearm_y,magnet_forearm_z)
+
+testingsubset <- rawtesting %>% select(user_name, num_window,
+               roll_belt,pitch_belt,yaw_belt,
+               gyros_belt_x,gyros_belt_y,gyros_belt_z,
+               accel_belt_x,accel_belt_y,accel_belt_z,
+               magnet_belt_x,magnet_belt_y,magnet_belt_z,
+               roll_arm,pitch_arm,yaw_arm,
+               gyros_arm_x,gyros_arm_y,gyros_arm_z,
+               accel_arm_x,accel_arm_y,accel_arm_z,
+               magnet_arm_x,magnet_arm_y,magnet_arm_z,
+               gyros_dumbbell_x,gyros_dumbbell_y,gyros_dumbbell_z,
+               accel_dumbbell_x,accel_dumbbell_y,accel_dumbbell_z,
+               magnet_dumbbell_x,magnet_dumbbell_y,magnet_dumbbell_z,
+               roll_forearm,pitch_forearm,yaw_forearm,
+               gyros_forearm_x,gyros_forearm_y,gyros_forearm_z,
+               accel_forearm_x,accel_forearm_y,accel_forearm_z,
+               magnet_forearm_x,magnet_forearm_y,magnet_forearm_z)
+
+```
+
+###Handling NAs
+
+In this section, we'll clean things up a bit by creating a logical function for if a value is NA. Then we use the simple map function to remove NAs. We convert the data set to a tibble to prevent any formatting issues downstream.
+
+```{r test}
+NAasy <- function(x, y){
+  x[is.na(x)] <- y
+  x # to return vector after replacement
+}
+
+trainingdata <- map(trainingsubset, NAasy, 0)
+trainingdata <- as.tibble(trainingdata)
+
+testingdata <- map(testingsubset, NAasy, 0)
+testingdata <- as.tibble(testingdata)
+
+```
+
+###Exploration
+
+Since the data is provided to us pre-partitioned between training and test sets, we are ready for a little exploratory data analysis.
+
+```{r plot}
+
+ggplot(trainingdata) + 
+        geom_bar(mapping = aes(x = classe, fill = user_name)) + 
+        labs(title=paste("Barbell Activity per Class by User"))
+```
+
+Next it may be useful to see the spread of types of classes by number of windows. We can tell some classes are not spread evenly among user. Jeremy and Pedro for instance have a tendency to move their hips to the front while adelmo and charles have performed a seemingly large number of exercises to spec.
+
+```{r plot two}
+levels(trainingdata$classe) <- c("Exercise to Specs","Elbow to Front","Dumbbell Lift Halfway","Dumbbell Lower Halfway","Hips to Front")
+
+ggplot(trainingdata, aes(x = user_name, y=num_window, color = classe)) + 
+        geom_point() +
+        labs(title=paste("Number of Windows Capturing Bar Bell Activity by User and Class"))
+
+```
+
+Lastly it helps guide research to view correlations among the variables we subset. Roll and Yaw Belt for example seem to have a relationship. Notably Acceleration of Belts Y and Z seem to have a negative correlation. More research could be done as to why.
+
+```{r corr}
+cormax <- cor(trainingdata[, 4:48])
+corrplot(cormax[1:10,1:10])
+
+qplot(roll_belt, accel_belt_y, data=trainingdata, color=classe, main='Plot of roll_belt by accel_belt_y per classe')
+
+```
+
+###Modeling
+
+After completing some exploratory data analysis, it's time to train our model. We'll use a random forest model to maintain interpretability while allowing for the high correlation classes.
+
+```{r model}
+
+model <- train(classe ~., data=trainingdata, method="rf")
+model$finalModel
+plot(model)
+
+```
+
+###Testing
+
+Finally we must run our test data through the model. Here is where we finally determine how well an individual performs an exercise giving a sample of barbell lifts.
+
+```{r testing}
+
+testingpred <- predict(model, newdata = testingdata)
+
+testingpred
+```
+
+Results demonstrate a significant model. While more research must be done to determine if we can improve predictiveness, we can safely predict when an exercise will be performed to specification or if not, how it will be out of spec to a .14% error rate. For example, an ensemble method may be more predictive, but we choose not to sacrifice interpretability. It will be much easier to explain a random forest model than to explain other methods to our peers and laymen wanting to build on this research. You might say that the model does the "lifting" for us.
+
+```{Refs}
+References
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+```
